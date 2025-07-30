@@ -1,53 +1,51 @@
-// Bismi Online - Admin & Printer App (Simplified for Debugging)
-// This version ONLY acts as a web server to test the connection.
-// It has NO database connection.
+// Bismi Online - Admin & Printer App (Backend-Only for Render)
+// This version is a pure API server and does NOT serve any HTML files.
 
+const { MongoClient } = require('mongodb');
 const express = require('express');
 const cors = require('cors');
-const path = require('path');
 
 // --- CONFIGURATION ---
-const PORT = 3000;
+const MONGO_CONNECTION_STRING = "mongodb+srv://blahblahhblublu:bismiadmin123@bismi-online.yinh41t.mongodb.net/?retryWrites=true&w=majority&appName=bismi-online";
+const DB_NAME = "bismi-online-demo";
+const COLLECTION_NAME = "orders";
+// Render provides the PORT in an environment variable, so we use that.
+const PORT = process.env.PORT || 3000;
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
-
-// --- SERVE THE FRONTEND WEBSITE ---
-app.get('/', (req, res) => {
-    res.sendFile(path.join(__dirname, 'index.html'));
-});
+let ordersCollection;
 
 // --- API ENDPOINT ---
+// The frontend will send new orders to this URL: https://your-render-url.onrender.com/create-order
 app.post('/create-order', async (req, res) => {
-    // This log is the most important part for debugging.
-    console.log(`\n➡️ Received a request at /create-order at ${new Date().toLocaleTimeString()}`);
-    
     try {
         const orderDetails = req.body;
-        console.log("Received order details:", orderDetails);
-        
-        // We are not saving to the DB in this test, just confirming receipt.
-        printReceipt(orderDetails);
+        orderDetails.status = 'new';
+        orderDetails.createdAt = new Date();
 
-        // Send a success response back to the frontend
-        res.status(200).json({ success: true, message: "Order received by server!" });
-
+        const result = await ordersCollection.insertOne(orderDetails);
+        console.log(`✅ Order successfully saved to database with ID: ${result.insertedId}`);
+        res.status(200).json({ success: true, orderId: result.insertedId });
     } catch (e) {
-        console.error("❌ Error processing order:", e);
-        res.status(500).json({ success: false, message: "Failed to process order on server" });
+        console.error("❌ Error saving order:", e);
+        res.status(500).json({ success: false, message: "Failed to save order" });
     }
 });
 
-
-// --- PRINTER LOGIC ---
+// --- PRINTER LOGIC (This will run on the Render server) ---
+// Note: This will only print to the Render logs, not a physical printer.
+// The real printing will happen on the local PC app we build later.
 function printReceipt(order) {
     console.log("\n" + "=".repeat(30));
-    console.log("        *** NEW ORDER (TEST) ***");
+    console.log("        *** NEW ORDER RECEIVED ***");
     console.log("=".repeat(30));
-    const createdAt = new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
+    const orderId = order._id;
+    const createdAt = new Date(order.createdAt).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
     const total = order.total;
+    console.log(`Order ID: ${orderId}`);
     console.log(`Time: ${createdAt}`);
     console.log("-".repeat(30));
     console.log("Items:");
@@ -61,13 +59,38 @@ function printReceipt(order) {
 }
 
 // --- MAIN APPLICATION LOGIC ---
-function main() {
+async function main() {
     try {
+        console.log("Connecting to the database...");
+        const client = new MongoClient(MONGO_CONNECTION_STRING);
+        await client.connect();
+        const db = client.db(DB_NAME);
+        ordersCollection = db.collection(COLLECTION_NAME);
+        console.log("✅ Database connection successful!");
+
         // Start the Express server
         app.listen(PORT, () => {
-            console.log(`\n✅ Your app is live! Open http://localhost:${PORT} in your browser.`);
-            console.log("Waiting for an order from the website...");
+            console.log(`\n✅ Server is live and listening on port ${PORT}`);
         });
+
+        // This loop will check for new orders and print them to the Render logs.
+        setInterval(async () => {
+            try {
+                const findResult = await ordersCollection.findOneAndUpdate(
+                    { status: 'new' },
+                    { $set: { status: 'processed' } } // We'll just mark it as processed for now
+                );
+                
+                const newOrder = findResult ? findResult.value : null;
+
+                if (newOrder) {
+                    console.log(`📬 New order found! [ID: ${newOrder._id}]`);
+                    printReceipt(newOrder);
+                }
+            } catch (e) {
+                console.error("\nAn error occurred in the processing loop:", e);
+            }
+        }, 10000); // Check every 10 seconds
 
     } catch (e) {
         console.error("❌ Main application error:", e);
